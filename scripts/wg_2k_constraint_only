@@ -1,0 +1,31 @@
+#!/bin/bash
+#SBATCH -J phylop_neutral_mutation_rate
+#SBATCH -A WGS10K-SL2-CPU
+#SBATCH -p skylake-himem 
+#SBATCH -N 1
+#SBATCH --exclusive
+#SBATCH -t 36:00:00
+#SBATCH --requeue
+#SBATCH --mail-type=FAIL --mail-type=REQUEUE
+
+# Load modules
+. /etc/profile.d/modules.sh
+module purge
+module load default-impi
+# cbrc modules are here:
+export MODULEPATH=/scratch/cbrcmod/modules/out/modulefiles:$MODULEPATH
+module load samtools/1.2 parallel
+
+#ulimit -Sn unlimited
+
+## add the variant counts from gnomad/bridge
+cd ~/software/gwc/R
+
+~/anaconda2/bin/Rscript selection2.phylop.R \
+--config_file ../R/gnomad_BRIDGE_config.R \
+--chromosome ${SLURM_ARRAY_TASK_ID} \
+--phylop_neutral_max 0 \
+--elements ../data/chr${SLURM_ARRAY_TASK_ID}_whole_genome_tile_2kb.mut_rates.coverage_added.txt \
+--output ../data/chr${SLURM_ARRAY_TASK_ID}_whole_genome_tile_2kb.mut_rates.coverage_added.variants_added.txt
+
+

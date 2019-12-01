@@ -1,0 +1,54 @@
+#!/bin/bash
+#SBATCH -J phylop_neutral_mutation_rate
+#SBATCH -A WGS10K-SL2-CPU
+#SBATCH -p skylake-himem 
+#SBATCH -N 1
+#SBATCH --exclusive
+#SBATCH -t 36:00:00
+#SBATCH --requeue
+#SBATCH --mail-type=FAIL --mail-type=REQUEUE
+
+# Load modules
+. /etc/profile.d/modules.sh
+module purge
+module load default-impi
+# cbrc modules are here:
+export MODULEPATH=/scratch/cbrcmod/modules/out/modulefiles:$MODULEPATH
+module load samtools/1.2 parallel
+
+#ulimit -Sn unlimited
+cd ~/software/gwc/R
+
+### add the triplet mutation rate with methylation correction
+
+~/anaconda2/bin/Rscript generate_phylop_mutation_rates.Rscript \
+--phylop_bed ../data/chr${SLURM_ARRAY_TASK_ID}_hg19.100way.phyloP100way.bed.gz \
+--elements ../data/whole_genome_tile_2kb.txt \
+--chromosome ${SLURM_ARRAY_TASK_ID} \
+--elements_out ../data/chr${SLURM_ARRAY_TASK_ID}_whole_genome_tile_2kb.mut_rates.chunk${CHUNK}.txt \
+--methylation_correction --chunk $CHUNK
+
+# get coverage for the elements
+
+~/anaconda2/bin/Rscript coverage_annotate.R \
+--elements ../data/chr${SLURM_ARRAY_TASK_ID}_whole_genome_tile_2kb.mut_rates.chunk${CHUNK}.txt \
+--chromosome ${SLURM_ARRAY_TASK_ID} \
+--out ../data/chr${SLURM_ARRAY_TASK_ID}_whole_genome_tile_2kb.mut_rates.coverage_added.chunk${CHUNK}.txt
+
+## add the variant counts from gnomad/bridge
+
+~/anaconda2/bin/Rscript selection2.phylop.R \
+--config_file ~/software/gwc/R/gnomad_BRIDGE_config.R \
+--chromosome ${SLURM_ARRAY_TASK_ID} \
+--phylop_neutral_max 0 \
+--elements ../data/chr${SLURM_ARRAY_TASK_ID}_whole_genome_tile_2kb.mut_rates.coverage_added.chunk${CHUNK}.txt \
+--output ../data/chr${SLURM_ARRAY_TASK_ID}_whole_genome_tile_2kb.mut_rates.coverage_added.variants_added.chunk${CHUNK}.txt
+
+#### annotate the elements
+cd ~/software/gwc/R
+
+~/anaconda2/bin/Rscript annotate_genomic_features.Rscript \
+--config_file ~/software/gwc/R/gnomad_BRIDGE_config.R \
+--elements ../data/wg2k/chr${SLURM_ARRAY_TASK_ID}_whole_genome_tile_2kb.mut_rates.coverage_added.variants_added.chunk${CHUNK}.txt \
+--elements_out ../data/wg2k/chr${SLURM_ARRAY_TASK_ID}_whole_genome_tile_2kb.mut_rates.coverage_added.variants_added.features_added.chunk${CHUNK}.txt
+

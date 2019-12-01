@@ -1,0 +1,142 @@
+### dependencies
+library(optparse) 
+library(plyr) 
+library(stringr) 
+source("./mutation_null_model.R") 
+source("./annotation_tools.R")
+library(data.table)
+
+### command line options
+option_list <- list(
+  make_option("--phylop_bed", help="Entire chromosome of PhyloP scores."),
+  make_option("--chromosome", default = 'all', help = "chromosome to subset elements"),
+  make_option("--elements", help="Mutation rates for different PhyloP bins across elements."),
+  make_option("--elements_out", help="File to output name of genes with mutability and observed variants"),
+  make_option("--methylation_correction", default = F, action = 'store_true'),
+  make_option("--background_correction", default = F, action = 'store_true', help = 'pass genome-wide variation in mutation rate to make correction'),
+  make_option("--chunk", default = 'all', help = 'optionally, input elements can be split into chunks')
+)
+
+
+args <- parse_args(OptionParser(option_list=option_list))
+
+print(args)
+
+
+# load the full set of sites
+sites = read.table(gzfile(args$phylop_bed)) 
+colnames(sites) = c("chr", "start", "end", "phylop") 
+assertthat::are_equal(sites$end, sites$start + 1) 
+sites$start = sites$end + 1 
+sites$pos = sites$end
+
+# make all of the in the form chr1, chr2, etc.
+if (any(!grepl("^chr", sites$chr))) {
+  sites$chr = paste0("chr", sites$chr)
+}
+
+# only keep sites in elements and assign to element
+elements = read.delim(args$elements)
+
+print(head(elements))
+
+# make all of the in the form chr1, chr2, etc.
+if (any(!grepl("^chr", elements$chr))) {
+  elements$chr = paste0("chr", elements$chr)
+}
+
+if (args$chromosome != 'all') {
+  elements = subset(elements, chr %in% paste0('chr', args$chromosome))
+}
+
+if (args$chunk != 'all') {
+  elements = subset(elements, chunk %in% args$chunk)
+}
+
+input_rows = nrow(elements)
+
+elements$region_id = paste0(elements$chr, ":", elements$start, "-", elements$end) 
+sites = filter_with_bed(sites, elements) 
+sites = get_region_id_multi_overlap(sites, elements)
+
+
+# get context and mutation rate for each site.
+sites$seq = as.character(getSeq(Hsapiens, sites$chr, sites$pos-1, sites$pos+1))
+
+# add the base mutation rate for each element, need to pick out the sites that are CpGs and retrieve the prop methylated
+
+if (args$methylation_correction == T) {
+
+  # load in WGBS data from ESCs
+  wgbs = read.table(gzfile("~/scratch/CpG/data/E008_WGBS_FractionalMethylation.bedGraph.gz"), header = FALSE, sep = "\t")
+
+  colnames(wgbs) =c("chr", "start", "stop", "prop_methylated") 
+  wgbs$pos = wgbs$start + 1 
+  wgbs = wgbs[,c("chr", "pos", "prop_methylated")]
+
+  print(head(wgbs))
+
+  wgbs = subset(wgbs, chr %in% paste0("chr", seq(1,22)))
+  wgbs$chr = factor(wgbs$chr, levels = paste0("chr", seq(1,22)), ordered = TRUE)
+
+  wgbs_sites = filter_with_bed(wgbs, elements) 
+  wgbs_sites = get_region_id_multi_overlap(wgbs_sites, sites)
+
+  print(head(wgbs_sites))
+
+  wgbs_split = split(wgbs_sites, wgbs_sites$region_id) 
+  cpg_positions = sapply(wgbs_split, function(df) c(df$pos - sites$start[sites$region_id == df$region_id[1]] + 1))
+  prop_methylated = sapply(wgbs_split, function(df) c(df$prop_methylated))
+
+  #new version, fit to gnomAD data
+  #methyl_df = read.table("~/scratch/CpG/data/methylation_effect_on_obs_exp.ESC.Samocha_2014.txt", header = TRUE, sep = "\t")
+  methyl_df = read.table("~/scratch/CpG/data/methylation_effect_on_obs_exp.ESC.DNM_direct.txt", header = TRUE, sep = "\t")
+  methyl_df$prop_methylated = c(0, seq(0.075, 0.925, 0.05), 1) 
+  methylation_correction_model = loess(obs_exp_ratio ~ prop_methylated, methyl_df)
+
+  print(methyl_df)
+
+  seqs = sites$seq[match(names(prop_methylated), sites$region_id)] 
+  seqs = split(seqs, f = names(prop_methylated))
+}
+
+# set the sequence mutability
+sites$p_snp_null = unlist(sapply(sites$seq, p_sequence))
+
+if (args$methylation_correction == T) {
+  # save the triplet p_snp_null
+  sites$p_snp_null_no_methyl_correction = sites$p_snp_null
+
+  # correct based on CpGs methylation
+  sites$p_snp_null[match(names(prop_methylated), sites$region_id)] = unlist(mapply(p_sequence_meth, seqs, cpg_positions, prop_methylated, MoreArgs = list("correction_model" = methylation_correction_model))) # takes sequence, sites that are cpgs, prop methylated at those sites
+}
+
+print(nrow(sites))
+
+sites = subset(sites, !is.na(sites$p_snp_null)) 
+
+print(nrow(sites))
+
+#elements_mu = ddply(sites, c("region_id"), function(df) data.frame(frac_phylop_lt_0 = sum(df$phylop < 0), p_snp_phylop_lt_0 = sum(df$p_snp_null[df$phylop < 0]), p_snp_phylop_lt_0.5 = sum(df$p_snp_null[df$phylop < 0.5]), p_snp_phylop_lt_1 = sum(df$p_snp_null[df$phylop < 1]), p_snp_phylop_lt_1.5 = sum(df$p_snp_null[df$phylop < 1.5]), p_snp_phylop_lt_2 = sum(df$p_snp_null[df$phylop < 2]), p_snp_phylop_lt_2.5 = sum(df$p_snp_null[df$phylop < 2.5]), p_snp_phylop_lt_3 = sum(df$p_snp_null[df$phylop < 3]), p_snp_phylop_lt_3.5 = sum(df$p_snp_null[df$phylop < 3.5]), p_snp_phylop_lt_4 = sum(df$p_snp_null[df$phylop < 4.0]), p_snp_phylop_lt_4.5 = sum(df$p_snp_null[df$phylop < 4.5]), p_snp_phylop_lt_5 = sum(df$p_snp_null[df$phylop < 5.0]), p_snp_phylop_lt_5.5 = sum(df$p_snp_null[df$phylop < 5.5]), p_snp_phylop_lt_6 = sum(df$p_snp_null[df$phylop < 6]), p_snp_total = sum(df$p_snp_null))) 
+
+elements_mu = data.table(sites)
+setkey(elements_mu, "region_id")
+elements_mu = elements_mu[,list(frac_phylop_lt_0 = sum(phylop < 0), p_snp_phylop_lt_n3 = sum(p_snp_null[phylop < -3]),p_snp_phylop_lt_n2 = sum(p_snp_null[phylop < -2]), p_snp_phylop_lt_n1 = sum(p_snp_null[phylop < -1]), p_snp_phylop_lt_0 = sum(p_snp_null[phylop < 0]), p_snp_phylop_lt_1 = sum(p_snp_null[phylop < 1]), p_snp_phylop_lt_2 = sum(p_snp_null[phylop < 2]), p_snp_phylop_lt_3 = sum(p_snp_null[phylop < 3]), p_snp_phylop_lt_4 = sum(p_snp_null[phylop < 4]), p_snp_phylop_lt_5 = sum(p_snp_null[phylop < 5]), p_snp_phylop_lt_6 = sum(p_snp_null[phylop < 6]), p_snp_total = sum(p_snp_null)), by = key(elements_mu)]
+elements_mu = as.data.frame(elements_mu)
+
+elements_mu$chr = elements$chr[match(elements_mu$region_id, elements$region_id)] 
+elements_mu$start = elements$start[match(elements_mu$region_id, elements$region_id)] 
+elements_mu$end = elements$end[match(elements_mu$region_id, elements$region_id)]
+
+assertthat::are_equal(nrow(elements_mu), input_rows)
+
+elements_mu = merge(elements_mu, elements, by = c("chr", "start", "end", "region_id"), all.y = T) # add on the columns from original elements data frame
+
+if (args$background_correction == T) {
+  # add background mutation selection if applicable
+  background = read.delim("~/scratch/MUTMODEL/whole_genome_regional_variation_in_mutation_rate.50kb_bins.txt")
+  elements_mu$mu_background = annotate_mu_background(elements_mu, background)
+}
+
+write.table(elements_mu, file = args$elements_out, col.names = T, sep = "\t", quote = F, row.names = F)
+
