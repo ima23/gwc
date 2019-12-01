@@ -68,7 +68,7 @@ sites$seq = as.character(getSeq(Hsapiens, sites$chr, sites$pos-1, sites$pos+1))
 if (args$methylation_correction == T) {
 
   # load in WGBS data from ESCs
-  wgbs = read.table(gzfile("~/scratch/CpG/data/E008_WGBS_FractionalMethylation.bedGraph.gz"), header = FALSE, sep = "\t")
+  wgbs = read.table(gzfile("../data/E008_WGBS_FractionalMethylation.bedGraph.gz"), header = FALSE, sep = "\t")
 
   colnames(wgbs) =c("chr", "start", "stop", "prop_methylated") 
   wgbs$pos = wgbs$start + 1 
@@ -89,8 +89,7 @@ if (args$methylation_correction == T) {
   prop_methylated = sapply(wgbs_split, function(df) c(df$prop_methylated))
 
   #new version, fit to gnomAD data
-  #methyl_df = read.table("~/scratch/CpG/data/methylation_effect_on_obs_exp.ESC.Samocha_2014.txt", header = TRUE, sep = "\t")
-  methyl_df = read.table("~/scratch/CpG/data/methylation_effect_on_obs_exp.ESC.DNM_direct.txt", header = TRUE, sep = "\t")
+  methyl_df = read.table("../data/methylation_effect_on_obs_exp.ESC.DNM_direct.txt", header = TRUE, sep = "\t")
   methyl_df$prop_methylated = c(0, seq(0.075, 0.925, 0.05), 1) 
   methylation_correction_model = loess(obs_exp_ratio ~ prop_methylated, methyl_df)
 
@@ -134,7 +133,7 @@ elements_mu = merge(elements_mu, elements, by = c("chr", "start", "end", "region
 
 if (args$background_correction == T) {
   # add background mutation selection if applicable
-  background = read.delim("~/scratch/MUTMODEL/whole_genome_regional_variation_in_mutation_rate.50kb_bins.txt")
+  background = read.delim("../data/whole_genome_regional_variation_in_mutation_rate.50kb_bins.txt")
   elements_mu$mu_background = annotate_mu_background(elements_mu, background)
 }
 
